@@ -104,7 +104,7 @@ modules:
     sources: &wine_nine_standalone_sources
       - type: git
         url: "https://github.com/iXit/wine-nine-standalone.git"
-        tag: v0.4
+        tag: v0.5
       - type: shell
         commands:
           - sed 's/@PKG_CONFIG@/pkg-config/g' tools/cross-wine64.in > tools/cross-wine64
