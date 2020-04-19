@@ -83,8 +83,8 @@ modules:
     sources: &wine_sources
       - type: git
         url: "https://github.com/lutris/wine.git"
-        branch: lutris-5.4
-        commit: c40d0fc08f114b70b5f7d5d111415b30598efcfe
+        branch: lutris-5.6
+        commit: 3bcf38d1b646b62a1834a21e9dcc36e7122ad7fe
 
   - name: wine-nine-standalone
     buildsystem: meson
