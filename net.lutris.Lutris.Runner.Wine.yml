@@ -1,27 +1,47 @@
 id: net.lutris.Lutris.Runner.Wine
 branch: beta
-sdk: org.gnome.Sdk//3.34
 runtime: net.lutris.Lutris
 runtime-version: beta
+sdk: org.gnome.Sdk//40
 build-extension: true
 appstream-compose: false
 
 sdk-extensions:
   - org.gnome.Sdk.Compat.i386
   - org.freedesktop.Sdk.Extension.toolchain-i386
+  - org.freedesktop.Sdk.Extension.mingw-w64
 
 build-options:
   prefix: /app/runners/Wine
-  prepend-path: /app/runners/Wine/bin
-  strip: true
+  append-path: /usr/lib/sdk/mingw-w64/bin:/app/runners/Wine/bin
+  ldflags: -L/app/runners/Wine/lib
+  env:
+    C_INCLUDE_PATH: /app/runners/Wine/include:/app/include
+    CPLUS_INCLUDE_PATH: /app/runners/Wine/include:/app/include
+    PKG_CONFIG_PATH: "/app/runners/Wine/lib/pkgconfig\
+                     :/app/lib/pkgconfig\
+                     :/app/share/pkgconfig\
+                     :/usr/lib/x86_64-linux-gnu/pkgconfig\
+                     :/usr/share/pkgconfig"
+    LD_RUN_PATH: /app/runners/Wine/lib
+  cflags: &optflags -O2 -pipe -march=nocona -mtune=core-avx2 -mfpmath=sse -fwrapv -fno-strict-aliasing
+  cflags-override: true
+  cxxflags: *optflags
+  cxxflags-override: true
 
 x-compat-i386-opts: &compat_i386_opts
-  prepend-pkg-config-path: /app/lib32/pkgconfig:/usr/lib/i386-linux-gnu/pkgconfig
-  ldflags: -L/app/lib32
+  ldflags: -L/app/runners/Wine/lib32 -L/app/lib32
+  prepend-path: /app/runners/Wine/bin32
   append-path: /usr/lib/sdk/toolchain-i386/bin
   env:
-    CC: i686-unknown-linux-gnu-gcc
-    CXX: i686-unknown-linux-gnu-g++
+    CC: ccache i686-unknown-linux-gnu-gcc
+    CXX: ccache i686-unknown-linux-gnu-g++
+    PKG_CONFIG_PATH: "/app/runners/Wine/lib32/pkgconfig\
+                     :/app/lib32/pkgconfig\
+                     :/app/share/pkgconfig\
+                     :/usr/lib/i386-linux-gnu/pkgconfig\
+                     :/usr/share/pkgconfig"
+    LD_RUN_PATH: /app/runners/Wine/lib32
   libdir: /app/runners/Wine/lib32
 
 cleanup:
@@ -48,8 +68,38 @@ cleanup:
   - /lib/wine/*.def
   - /lib32/wine/*.def
 modules:
+  - name: jxrlib
+    buildsystem: cmake-ninja
+    builddir: true
+    build-options:
+      config-opts:
+        - -DJXRLIB_INSTALL_LIB_DIR=lib
+    config-opts: &jxrlib-config-opts
+      - -DCMAKE_INSTALL_RPATH=$ORIGIN
+    cleanup:
+      - /bin
+    sources: &jxrlib_sources
+      - type: archive
+        url: https://src.fedoraproject.org/repo/pkgs/jxrlib/jxrlib_1_1.tar.gz/c0a6a4529cb687d127cf52b52f5ec848/jxrlib_1_1.tar.gz
+        sha256: a79e27801ab19af936beb9ece36f1c6c1914c3baf25597fd270709dc4520a190
+      - type: file
+        path: files/jxrlib/CMakeLists.txt
 
-  # Native arch build
+  - name: jxrlib-32bit
+    only-arches:
+      - x86_64
+    build-options:
+      arch:
+        x86_64: *compat_i386_opts
+      config-opts:
+        - -DJXRLIB_INSTALL_LIB_DIR=lib32
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts: *jxrlib-config-opts
+    cleanup:
+      - /bin
+    sources: *jxrlib_sources
+
 
   - name: wine
     build-options:
@@ -57,6 +107,7 @@ modules:
         x86_64:
           config-opts:
             - --enable-win64
+            - --with-mingw=ccache x86_64-w64-mingw32-gcc
           libdir: /app/runners/Wine/lib
     config-opts: &wine_common_opts
       - --disable-win16
@@ -66,25 +117,32 @@ modules:
       - --with-dbus
       - --without-hal
       - --without-oss
+      - --with-jxrlib
+      - JXRLIB_CFLAGS=-I/app/runners/Wine/include/jxrlib
     make-install-args: &wine_common_make_install_args
       - LDCONFIG=/bin/true
-      - STRIP=/bin/true
       - UPDATE_DESKTOP_DATABASE=/bin/true
-    post-install:
-      - |
-        case $FLATPAK_ARCH in
-          x86_64)
-            mv $FLATPAK_DEST/bin/wineserver{,64}
-          ;;
-          i386)
-            mv $FLATPAK_DEST/bin/wineserver{,32}
-          ;;
-        esac
+      - INSTALL_PROGRAM_FLAGS=-s
     sources: &wine_sources
-      - type: git
-        url: "https://github.com/lutris/wine.git"
-        branch: lutris-5.0
-        commit: 99849d3429259350e24f4870c69aea36b007bcd8
+      - type: archive
+        url: "https://github.com/lutris/wine/archive/refs/tags/lutris-6.4.tar.gz"
+        sha256: e806753389de756dd5767987424fee7f090f720bfc50a55a905a16bd374e42a7
+
+  - name: wine-32bit
+    build-options:
+      arch:
+        x86_64: *compat_i386_opts
+      config-opts:
+        - --bindir=/app/runners/Wine/bin32
+        - --with-mingw=ccache i686-w64-mingw32-gcc
+    config-opts: *wine_common_opts
+    make-install-args: *wine_common_make_install_args
+    post-install:
+      - mv $FLATPAK_DEST/bin32/{wine,wine-preloader} $FLATPAK_DEST/bin/
+    cleanup:
+      - /bin32
+    sources: *wine_sources
+
 
   - name: wine-nine-standalone
     buildsystem: meson
@@ -93,8 +151,6 @@ modules:
         - --cross-file=../tools/cross-wine64
       env:
         LIBDIR: /app/runners/Wine/lib
-    config-opts: &wine_nine_standalone_config_opts
-      - -DD3D9NINE_MODULEPATH=/usr/lib/x86_64-linux-gnu/GL/lib/d3d:/usr/lib/i386-linux-gnu/GL/lib/d3d
     no-make-install: true
     build-commands: &wine_nine_standalone_build_commands
       - install -Dm755 ninewinecfg/ninewinecfg.exe.so ${LIBDIR}/wine/ninewinecfg.exe.so
@@ -104,25 +160,14 @@ modules:
     sources: &wine_nine_standalone_sources
       - type: git
         url: "https://github.com/iXit/wine-nine-standalone.git"
-        tag: v0.4
+        tag: v0.7
+        commit: 83b508d2e3bd6af13d22082c891692a9242471a7
+      - type: patch
+        path: patches/wine-nine-standalone/no-libwine.patch
       - type: shell
         commands:
           - sed 's/@PKG_CONFIG@/pkg-config/g' tools/cross-wine64.in > tools/cross-wine64
           - sed 's/@PKG_CONFIG@/pkg-config/g' tools/cross-wine32.in > tools/cross-wine32
-
-  # 32-bit compatibility build
-
-  - name: wine-32bit
-    only-arches:
-      - x86_64
-    build-options:
-      arch:
-        x86_64: *compat_i386_opts
-    config-opts: *wine_common_opts
-    make-install-args: *wine_common_make_install_args
-    post-install:
-      - mv $FLATPAK_DEST/bin/wineserver{,32}
-    sources: *wine_sources
 
   - name: wine-nine-standalone-32bit
     buildsystem: meson
@@ -133,25 +178,14 @@ modules:
         - --cross-file=../tools/cross-wine32
       env:
         LIBDIR: /app/runners/Wine/lib32
-    config-opts: *wine_nine_standalone_config_opts
     no-make-install: true
     build-commands: *wine_nine_standalone_build_commands
     sources: *wine_nine_standalone_sources
 
-  # Common stuff
 
   - name: bundle-setup
     buildsystem: simple
     build-commands:
-      - |
-        case $FLATPAK_ARCH in
-          x86_64)
-            ln -s wineserver64 $FLATPAK_DEST/bin/wineserver
-          ;;
-          i386)
-            ln -s wineserver32 $FLATPAK_DEST/bin/wineserver
-          ;;
-        esac
       - install -Dm644 -t ${FLATPAK_DEST}/share/metainfo ${FLATPAK_ID}.metainfo.xml
       - appstream-compose --basename=${FLATPAK_ID} --prefix=${FLATPAK_DEST} --origin=flatpak ${FLATPAK_ID}
     sources:
